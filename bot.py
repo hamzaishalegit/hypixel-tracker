@@ -1,52 +1,54 @@
 import discord
-import requests
 import asyncio
+from mcstatus import JavaServer
 import os
 
-# Get API keys and variables from Railway environment
-HYPIXEL_API_KEY = os.getenv("HYPIXEL_API_KEY")
+# Discord / server settings
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-# Multiple players separated by commas in Railway variable USERNAMES
-USERNAMES = os.getenv("USERNAMES").split(",")
+# Players to track
+USERNAMES = os.getenv("USERNAMES").split(",")  # e.g., "zonqued,SimpDePyke"
+
+# Minecraft server
+SERVER_ADDRESS = "mc.hypixel.net"  # Hypixel main server
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
-# Store last login for each player
-last_login_saved = {}
+# Keep track of online state
+online_status = {player.strip(): False for player in USERNAMES}
 
 async def check_players():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
+    server = JavaServer.lookup(SERVER_ADDRESS)
 
     while True:
-        for USERNAME in USERNAMES:
-            USERNAME = USERNAME.strip()  # remove extra spaces
+        try:
+            status = server.status()
+            online_sample = []
+            if status.players.sample:
+                online_sample = [p.name for p in status.players.sample]
 
-            # Get UUID from Mojang API
-            uuid_req = requests.get(f"https://api.mojang.com/users/profiles/minecraft/{USERNAME}")
-            if uuid_req.status_code != 200:
-                continue  # skip if username not found
-            uuid = uuid_req.json()["id"]
+            for player in USERNAMES:
+                player = player.strip()
+                currently_online = player in online_sample
 
-            # Get Hypixel player data
-            url = f"https://api.hypixel.net/player?key={HYPIXEL_API_KEY}&uuid={uuid}"
-            response = requests.get(url).json()
+                # Player just came online
+                if currently_online and not online_status[player]:
+                    online_status[player] = True
+                    await channel.send(f"🚨 {player} is ONLINE on Hypixel!")
 
-            if response.get("success") and "player" in response and response["player"]:
-                last_login = response["player"].get("lastLogin")
+                # Player just went offline
+                elif not currently_online and online_status[player]:
+                    online_status[player] = False
+                    await channel.send(f"⚡ {player} went OFFLINE on Hypixel!")
 
-                if USERNAME not in last_login_saved:
-                    last_login_saved[USERNAME] = last_login
+        except Exception as e:
+            print(f"Error checking server: {e}")
 
-                elif last_login != last_login_saved[USERNAME]:
-                    last_login_saved[USERNAME] = last_login
-                    # Send message in Discord
-                    await channel.send(f"🚨 {USERNAME} just logged in on Hypixel!")
-
-        await asyncio.sleep(300)  # check every 5 minutes
+        await asyncio.sleep(60)  # check every 60 seconds
 
 @client.event
 async def on_ready():
